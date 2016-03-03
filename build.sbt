@@ -22,4 +22,4 @@ libraryDependencies ++= Seq(
 )
 
 bintrayRepository := "sbt-plugins"
-
+bintrayVcsUrl := Some("https://github.com/jeremyrsmith/sbt-csd-packager")

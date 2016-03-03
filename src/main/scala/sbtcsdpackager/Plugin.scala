@@ -47,6 +47,7 @@ object Plugin extends AutoPlugin {
     val csdAddScripts = taskKey[Seq[(File, String)]]("Files to add to the CSD Scripts directory")
     val csdRoot = settingKey[File]("Base directory for CSD files")
     val csdClassifier = settingKey[String]("Classifier for CSD artifact")
+    val csdIncludeArtifact = taskKey[Option[(File, String)]]("Artifact to include in the CSD scripts directory")
     val csdGenerateSdl = settingKey[Boolean]("Whether to generate the service.sdl file, rather than use a supplied one")
 
     object csdSettings {
@@ -77,7 +78,8 @@ object Plugin extends AutoPlugin {
 
 
     lazy val csdBaseSettings : Seq[sbt.Def.Setting[_]] = Seq(
-      csdAddScripts := Seq((sbt.Keys.`package` in Compile).value -> (sbt.Keys.`package` in Compile).value.name),
+      csdIncludeArtifact := Some((sbt.Keys.`package` in Compile).value -> (sbt.Keys.`package` in Compile).value.name),
+      csdAddScripts := csdIncludeArtifact.value.toSeq,
       csdRoot := (sourceDirectory in Compile).value / "csd",
       csdServiceSdl := csdRoot.value / "descriptor" / "service.sdl",
       csdName := (name in Compile).value.toUpperCase.replaceAll("[^A-Z0-9_]+", "_"),
