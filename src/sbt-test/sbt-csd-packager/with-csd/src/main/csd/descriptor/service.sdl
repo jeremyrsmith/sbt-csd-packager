@@ -1,0 +1,10 @@
+{
+  "name" : "TEST",
+  "label": "test",
+  "version" : "0.1.0",
+  "description" : "Test SDL",
+  "runAs" : {
+    "user" : "test",
+    "group" : "test"
+  }
+}

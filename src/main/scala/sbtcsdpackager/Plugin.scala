@@ -4,14 +4,22 @@ import java.nio.file.{StandardCopyOption, StandardOpenOption}
 
 import csdbase.descriptor._
 import csdbase.descriptor.parameter.Parameter
-import csdbase.descriptor.role.{Generator, ConfigWriter, Gateway, Role}
-import sbt._, sbt.Keys._
-import cats.data.Xor, Xor._
-
-import io.circe.parser, io.circe.syntax._
+import csdbase.descriptor.role.{ConfigWriter, Gateway, Generator, Role}
+import sbt._
+import sbt.Keys._
+import cats.data.Xor
+import Xor._
+import io.circe.{Printer, parser}
+import io.circe.syntax._
 
 object Plugin extends AutoPlugin {
 
+  implicit class EitherOption[T,U](val either: Either[T,U]) extends AnyVal {
+    def toOption = either.fold(
+      fail => None,
+      succ => Some(succ)
+    )
+  }
 
   def copyRecursive(source: File, dest: File): Unit = if(!source.name.startsWith(".")) {
     if(source.isDirectory) {
@@ -31,36 +39,36 @@ object Plugin extends AutoPlugin {
     }
   }
 
-  val csdNameVersion = settingKey[(String,String)]("Name and version of CSD (read from service.sdl)")
-  val csdJarName = settingKey[String]("Name of CSD Jar")
+  private val sdlPrinter = Printer.spaces2.copy(dropNullKeys = true)
+
   val csdServiceSdl = settingKey[File]("Filename of CSD service.sdl")
-  val validatedSdl = settingKey[CSDescriptorData]("Validated service.sdl document")
-  val generatedSdl = settingKey[Option[CSDescriptorData]]("Generated service.sdl document")
+  val validatedSdl = taskKey[Option[CSDescriptorData]]("Validated service.sdl document")
+  val generatedSdl = taskKey[Option[CSDescriptorData]]("Generated service.sdl document")
   val generateServiceParameters = taskKey[Seq[Parameter]]("Generate service parameters from program's configuration")
+  val csdArtifact = taskKey[Artifact]("Artifact for CSD file")
 
   def mkOptional[A](seq: Seq[A]) = seq.headOption.map(_ => seq)
   def mkOptionalBoolean(boolean: Boolean, default: Boolean) = if(boolean != default) Some(boolean) else None
 
   object autoImport {
 
-    val csd = taskKey[File]("Build a Custom Service Descriptor")
+    val csd = taskKey[File]("Build a Custom Service Descriptor artifact for the project")
     val csdAddScripts = taskKey[Seq[(File, String)]]("Files to add to the CSD Scripts directory")
+    val csdAddAux = taskKey[Seq[(File, String)]]("Libraries to add to the CSD aux directory")
     val csdRoot = settingKey[File]("Base directory for CSD files")
-    val csdClassifier = settingKey[String]("Classifier for CSD artifact")
     val csdIncludeArtifact = taskKey[Option[(File, String)]]("Artifact to include in the CSD scripts directory")
     val csdGenerateSdl = settingKey[Boolean]("Whether to generate the service.sdl file, rather than use a supplied one")
+    val buildCsd = settingKey[Boolean]("Whether to build a CSD for the project")
 
     object csdSettings {
-      val csdName = settingKey[String]("Name of CSD. By convention, is all uppercase. Can only contain alphanumeric and underscore. By default, is derived from the name of the build.")
-      val csdVersion = settingKey[String]("Version of CSD.  Default is the version of the build.")
-      val csdDescription = settingKey[String]("Description of CSD.  Default is the description of the build.")
+      val label = settingKey[String]("Label for CSD")
       val runAs = settingKey[UserGroup]("User and group to run as.  Defaults to nobody/nobody.")
       val serviceInit = settingKey[Option[ServiceInit]]("Service Initialization specifier. Defaults to None.")
       val inExpressWizard = settingKey[Boolean]("Whether to show the service in the CM express wizard.  Defaults to false.")
       val maxInstances = settingKey[Option[Int]]("Maximum number of service instances. Defaults to None.")
       val icon = settingKey[Option[String]]("Icon to use in Cloudera Manager. Defaults to None (the default icon).")
       val compatibility = settingKey[Option[Compatibility]]("Compatibility descriptor. Defaults to None.")
-      val parcel = settingKey[Option[Parcel]]("Parcel repository to add to CM for this service. Defaults to None.")
+      val csdParcel = settingKey[Option[Parcel]]("Parcel repository to add to CM for this service. Defaults to None.")
       val serviceDependencies = settingKey[Seq[ServiceDependency]]("Services on which this service depends. Defaults to None.")
       val rolesWithExternalLinks = settingKey[Seq[String]]("List of roles which have external links. By default is computed from specified roles.")
       val hdfsDirs = settingKey[Seq[HDFSDir]]("List of HDFS directories for the service")
@@ -78,48 +86,57 @@ object Plugin extends AutoPlugin {
 
 
     lazy val csdBaseSettings : Seq[sbt.Def.Setting[_]] = Seq(
-      csdIncludeArtifact := Some((sbt.Keys.`package` in Compile).value -> (sbt.Keys.`package` in Compile).value.name),
+      csdIncludeArtifact <<= sbt.Keys.`package`.map(pf => Some(pf -> pf.name)),
+      artifact in csd := (if(buildCsd.value)
+          Artifact(s"${(name in csd).value}-${(version in csd).value}", "jar", "jar", (artifactClassifier in csd).value.getOrElse("csd"))
+        else
+          (artifact in compile).value),
+      publishArtifact in csd := true,
+      sbt.Keys.`package` in csd := csd.value,
       csdAddScripts := csdIncludeArtifact.value.toSeq,
+      csdAddAux := Seq(),
       csdRoot := (sourceDirectory in Compile).value / "csd",
       csdServiceSdl := csdRoot.value / "descriptor" / "service.sdl",
-      csdName := (name in Compile).value.toUpperCase.replaceAll("[^A-Z0-9_]+", "_"),
-      csdVersion := (version in Compile).value,
-      csdDescription := (description in Compile).value,
+      name in csd := name.value.toUpperCase.replaceAll("[^A-Z0-9_]+", "_"),
+      csdSettings.label in csd := name.value,
+      version in csd := version.value,
+      description in csd := description.value,
       runAs := UserGroup(user = "nobody", group = "nobody"),
       serviceInit := None,
-      inExpressWizard := false,
+      inExpressWizard  := false,
       maxInstances := None,
       icon := None,
       compatibility := None,
-      parcel := None,
+      csdParcel := None,
       serviceDependencies := Seq(),
-      roles := Seq(),
-      rolesWithExternalLinks := roles.value
+      roles in Global  := Seq(),
+      rolesWithExternalLinks  := roles.value
         .filter(role => role.externalLink.nonEmpty || role.additionalExternalLinks.exists(_.nonEmpty))
           .map(_.name),
-      hdfsDirs := Seq(),
-      serviceCommands := Seq(),
-      serviceParameters := Seq(),
-      externalKerberosPrincipals := Seq(),
-      kerberos := false,
-      providesKms := None,
-      rollingRestart := None,
-      csdGenerateSdl := false,
+      hdfsDirs  := Seq(),
+      serviceCommands  := Seq(),
+      serviceParameters  := Seq(),
+      externalKerberosPrincipals  := Seq(),
+      kerberos  := false,
+      providesKms  := None,
+      rollingRestart  := None,
+      csdGenerateSdl  := false,
       gateway := None,
-      generateServiceParameters := Seq(), //TODO
+      generateServiceParameters  := Seq(), //TODO
       generatedSdl := {
         if(csdGenerateSdl.value) {
           Some(CSDescriptorData(
-            name = csdName.value,
-            version = csdVersion.value,
-            description = csdDescription.value,
+            name = (name in csd).value,
+            label = (csdSettings.label in csd).value,
+            version = (version in csd).value,
+            description = (description in csd).value,
             runAs = runAs.value,
             serviceInit = serviceInit.value,
             inExpressWizard = mkOptionalBoolean(inExpressWizard.value, default = false),
             maxInstances = maxInstances.value,
             icon = icon.value,
             compatibility = compatibility.value,
-            parcel = parcel.value,
+            parcel = csdParcel.value,
             serviceDependencies = mkOptional(serviceDependencies.value),
             rolesWithExternalLinks = mkOptional(rolesWithExternalLinks.value),
             hdfsDirs = mkOptional(hdfsDirs.value),
@@ -134,66 +151,100 @@ object Plugin extends AutoPlugin {
           ))
         } else None
       },
-      validatedSdl := {
+      validatedSdl  := {
         generatedSdl.value match {
-          case Some(data) => data
+          case Some(data) => Some(data)
           case None =>
             val file = csdServiceSdl.value
-            val jsonString = new String(java.nio.file.Files.readAllBytes(file.toPath))
-            parser.parse(jsonString).flatMap(_.as[CSDescriptorData]) match {
-              case Right(data) => data
-              case Left(err) => throw new Exception("CSD could not be validated", err)
+            if(file.exists()) {
+              val jsonString = new String(java.nio.file.Files.readAllBytes(file.toPath))
+              parser.parse(jsonString).flatMap(_.as[CSDescriptorData]) match {
+                case Right(data) => Some(data)
+                case Left(err) => throw new Exception("CSD could not be validated", err)
+              }
+            } else {
+              streams.value.log.warn(s"Descriptor file $file does not exist; skipping CSD build")
+              None
             }
         }
       },
-      csdNameVersion := {
-        val validated = validatedSdl.value
-        (validated.name, validated.version)
-      },
-      csdJarName := {
-        val (name, version) = csdNameVersion.value
-        s"$name-$version"
-      },
-      csdClassifier := "csd",
-      artifact in (Compile, csd) := Artifact(name = csdNameVersion.value._1, classifier = "csd"),
-      csd := {
-        val root = csdRoot.value
-        val jarName = csdJarName.value
-        val targetRoot = crossTarget.value / jarName
-        copyRecursive(root, targetRoot)
+      packagedArtifact in csd <<= (
+        streams,
+        name,
+        artifact in csd,
+        packagedArtifact in (Compile,packageBin),
+        csdRoot,
+        crossTarget,
+        csdAddScripts,
+        csdAddAux,
+        validatedSdl,
+        buildCsd,
+        csdServiceSdl
+      ).map {
+        (streams, projName, art, compileArt, root, crossTarget, addScripts, addAux, sdl, buildCsd, serviceSdl) =>
 
-        val scriptsRoot = targetRoot / "scripts"
-        if(!scriptsRoot.exists)
-          scriptsRoot.mkdir()
+          if(sdl.isEmpty && buildCsd) {
+            throw new RuntimeException(
+              s"""
+                |CSD could not be built, because no content is available for service.sdl.  Either:
+                |1. Provide a service.sdl file in $root/descriptor/service.sdl, or
+                |2. Set csdGenerateSdl := true, and provide the necessary settings to generate it.
+              """.stripMargin)
+          }
+          val jarFile = crossTarget / s"${art.name}.${art.extension}"
 
-        val addScripts = csdAddScripts.value
-        addScripts foreach {
-          case (file, fileTargetName) => copyRecursive(file, scriptsRoot / fileTargetName)
-        }
+          if(sdl.isEmpty) {
+            streams.log.info(s"No SDL found in $projName; skipping CSD build")
+            compileArt._1 -> compileArt._2
 
-        val csdFiles = targetRoot.***.get map {
-          file => (file, targetRoot.toPath.relativize(file.toPath).toString)
-        }
+          } else {
 
-        val descriptorDir = targetRoot / "descriptor"
-        if(!descriptorDir.exists)
-          descriptorDir.mkdir()
+            val targetRoot = crossTarget / art.name
+            if (root.exists)
+              copyRecursive(root, targetRoot)
 
-        val descriptorFile = descriptorDir / "service.sdl"
-        generatedSdl.value foreach {
-          data =>
-            val json = data.asJson.toString()
-            java.nio.file.Files.write(descriptorFile.toPath, json.getBytes("UTF-8"), StandardOpenOption.CREATE)
-        }
 
-        val jarFile = crossTarget.value / s"$jarName.jar"
 
-        val log = streams.value.log
-        val manifest = new java.util.jar.Manifest
+            val scriptsRoot = targetRoot / "scripts"
+            if (!scriptsRoot.exists)
+              scriptsRoot.mkdir()
 
-        Package.makeJar(csdFiles, jarFile, manifest, log)
+            addScripts foreach {
+              case (file, fileTargetName) => copyRecursive(file, scriptsRoot / fileTargetName)
+            }
 
-        jarFile
+            if (addAux.nonEmpty) {
+              val auxDir = targetRoot / "aux"
+              if (!auxDir.exists())
+                auxDir.mkdir()
+
+              addAux foreach {
+                case (file, fileTargetName) => copyRecursive(file, auxDir / fileTargetName)
+              }
+            }
+
+            val csdFiles = targetRoot.***.get map {
+              file => (file, targetRoot.toPath.relativize(file.toPath).toString)
+            }
+
+            val descriptorDir = targetRoot / "descriptor"
+            if (!descriptorDir.exists)
+              descriptorDir.mkdir()
+
+            val descriptorFile = descriptorDir / "service.sdl"
+            sdl.filterNot(_ => serviceSdl.exists()) foreach {
+              data =>
+                val json = data.asJson.pretty(sdlPrinter)
+                java.nio.file.Files.write(descriptorFile.toPath, json.getBytes("UTF-8"), StandardOpenOption.CREATE)
+            }
+
+            val log = streams.log
+            val manifest = new java.util.jar.Manifest
+
+            Package.makeJar(csdFiles, jarFile, manifest, log)
+
+            art -> jarFile
+          }
       }
     )
 
@@ -206,6 +257,9 @@ object Plugin extends AutoPlugin {
   override def trigger = allRequirements
 
   // a group of settings that are automatically added to projects.
-  override val projectSettings = csdBaseSettings ++ addArtifact(artifact in (Compile, csd), csd).settings
+  override val projectSettings = inConfig(Compile)(csdBaseSettings) ++
+    Seq(csd := (packagedArtifact in (Compile,csd)).value._2) ++
+    Seq(buildCsd in Global := false) ++
+    addArtifact(artifact in (Compile, csd), csd)
 
 }

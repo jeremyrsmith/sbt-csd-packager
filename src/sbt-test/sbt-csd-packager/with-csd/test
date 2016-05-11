@@ -1,0 +1,5 @@
+> csd
+$ exists target/scala-2.11/TEST_WITH_CSD-0.1.0.jar
+$ must-mirror src/main/csd/descriptor/service.sdl target/scala-2.11/TEST_WITH_CSD-0.1.0/descriptor/service.sdl
+> publishLocal
+> checkPublished
