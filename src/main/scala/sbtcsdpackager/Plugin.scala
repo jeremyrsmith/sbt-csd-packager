@@ -39,6 +39,13 @@ object Plugin extends AutoPlugin {
     }
   }
 
+  def cleanRecursive(dir: File) = {
+    (dir ***).get foreach {
+      case file if file.isFile => file.delete()
+      case _ =>
+    }
+  }
+
   private val sdlPrinter = Printer.spaces2.copy(dropNullKeys = true)
 
   val csdServiceSdl = settingKey[File]("Filename of CSD service.sdl")
@@ -86,7 +93,7 @@ object Plugin extends AutoPlugin {
 
 
     lazy val csdBaseSettings : Seq[sbt.Def.Setting[_]] = Seq(
-      csdIncludeArtifact <<= sbt.Keys.`package`.map(pf => Some(pf -> pf.name)),
+      csdIncludeArtifact := None,
       artifact in csd := (if(buildCsd.value)
           Artifact(s"${(name in csd).value}-${(version in csd).value}", "jar", "jar", (artifactClassifier in csd).value.getOrElse("csd"))
         else
@@ -199,11 +206,14 @@ object Plugin extends AutoPlugin {
 
           } else {
 
-            val targetRoot = crossTarget / art.name
+            val targetRoot = crossTarget / (art.name + "-csd")
+            if(targetRoot.exists) {
+              // clean up the directory
+              cleanRecursive(targetRoot)
+            }
+
             if (root.exists)
               copyRecursive(root, targetRoot)
-
-
 
             val scriptsRoot = targetRoot / "scripts"
             if (!scriptsRoot.exists)

@@ -1,5 +1,5 @@
 organization := "io.github.jeremyrsmith"
-version := "0.1.6"
+version := "0.1.7"
 
 name := "sbt-csd-packager"
 description := "Package Custom Service Descriptors for Cloudera Manager"
@@ -14,7 +14,7 @@ addCompilerPlugin(
 
 resolvers += Resolver.bintrayRepo("jeremyrsmith", "maven")
 
-val circeVersion = "0.4.1"
+val circeVersion = "0.5.1"
 
 libraryDependencies ++= Seq(
   "io.circe" %% "circe-core" % circeVersion,

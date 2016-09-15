@@ -34,12 +34,18 @@ addSbtPlugin("io.github.jeremyrsmith" % "sbt-csd-packager" % "0.1.5")
 
 #### Adding other artifacts
 
-Typically, you'll want to include your main build artifact in your CSD so that it can be executed by your driver scripts.
-By default, the main build artifact is included in the `scripts` directory of the CSD.  If you want to change the artifact
-that's included, you can override the `csdIncludeArtifact` setting:
+You may want to include your main artifact in your CSD so that it can be executed by your driver scripts. Typically,
+artifacts will be included in a parcel rather than a CSD; particularly if the artifact is large, as large CSDs can cause
+problems with Cloudera Manager. Therefore, no artifacts are included in the CSD by default.
 
-For example, if I'm using the `[sbt-assembly](https://github.com/sbt/sbt-assembly)` plugin, and I want to include the
-assembled JAR instead of the main build artifact:
+An artifact can be included using the `csdIncludeArtifact` task. If you want to include your main build artifact, use:
+
+```scala
+csdIncludeArtifact <<= sbt.Keys.`package`.map(pf => Some(pf -> pf.name))
+```
+
+If I'm using the `[sbt-assembly](https://github.com/sbt/sbt-assembly)` plugin, and I want to include the assembled 
+JAR instead of the main build artifact (this is highly discouraged; again, you should use parcels for this):
 
 ```scala
 csdIncludeArtifact := Some((assembly in Compile).value -> (assembly in Compile).value.name)
@@ -54,13 +60,10 @@ filename in your driver scripts.  `csdIncludeArtifact` is an optional tuple `(Fi
 included in the `scripts` directory with the String filename.  For example:
 
 ```scala
-csdIncludeArtifact := Some((assembly in Compile).value -> (assembly in Compile).value.name)
+csdIncludeArtifact := Some((assembly in Compile).value -> "my-service.jar")
 ```
 
 This will include the assembly JAR (instead of the `package` JAR) under `scripts/` with the stable filename `my-service.jar`.
-
-To disable adding any artifact to the CSD (for example, if you are distributing the binaries as a parcel), set
-`csdIncludeArtifact := None`.
 
 ### Publishing a CSD
 
